@@ -14,7 +14,7 @@ export const SimulationProvider = ({ children }) => {
   const [noisySamples, setNoisySamples] = useState([]); // array of { x: seconds, y: noisy ECG }
   const [cleanSignal, setCleanSignal] = useState([]); // numeric array reference ECG
   const [filteredSamples, setFilteredSamples] = useState([]); // array of { x, y } adaptive-filter output
-
+ 
   // Adaptive filter params
   const [config, setConfig] = useState({
     filterType: "NLMS", // "NLMS" or "RLS"
