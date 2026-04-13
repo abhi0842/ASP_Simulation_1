@@ -1,242 +1,192 @@
-import { useContext, useState, useEffect } from "react";
-import { SimulationContext } from "../../context/SimulationContext";
-import styles from "./rightPanel.module.css";
-import Swal from "sweetalert2";
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useCallback, useEffect, useRef, useState } from "react";
 
-export const RightPanel = () => {
-  const baseUrl = import.meta.env.BASE_URL ?? '/';
-  const opt = (name) => (baseUrl === '/' ? name : baseUrl + name);
-  const {
-    time,
-    setTime,
-    originalFs,
-    // setUserFs,
-    setGenerateECG,
-    setApplyNoiseTrigger,
-    config,
-    setConfig,
-    setFilteredECG,
-    noise,
-    setNoise,
-    csvFilePath,
-    prevPathRef,
-    setCsvFilePath,
-    generateECG,
-    setApplypsdTrigger,
-    setFilteredSamples,
-  } = useContext(SimulationContext);
+export const SimulationContext = createContext();
 
-  const [adaptiveAlgo, setAdaptiveAlgo] = useState(config.filterType ?? "NLMS");
-  const [filterOrder, setFilterOrder] = useState(config.filterOrder ?? 32);
-  const [stepSize, setStepSize] = useState(config.stepSize ?? 0.1);
-  const [forgettingFactor, setForgettingFactor] = useState(config.forgettingFactor ?? 0.99);
-  const [regularization, setRegularization] = useState(config.regularization ?? 0.01);
+export const SimulationProvider = ({ children }) => {
+  // Time window shown in graphs (seconds)
+  const [time, setTime] = useState(5);
+  // Estimated sampling frequency (Hz)
+  const [originalFs, setOriginalFs] = useState(500);
 
-  const runPsd = () => {
-    if (!generateECG) {
-      Swal.fire({
-        icon: "info",
-        title: "Oops...",
-        text: "Please generate ECG signal first!",
-      });
-      return;
+  // ECG signals
+  const [rawSamples, setRawSamples] = useState([]); // array of { x: seconds, y: raw ECG }
+  const [noisySamples, setNoisySamples] = useState([]); // array of { x: seconds, y: noisy ECG }
+  const [cleanSignal, setCleanSignal] = useState([]); // numeric array reference ECG
+  const [filteredSamples, setFilteredSamples] = useState([]); // array of { x, y } adaptive-filter output
+ 
+  // Adaptive filter params
+  const [config, setConfig] = useState({
+    filterType: "NLMS", // "NLMS" or "RLS"
+    filterOrder: 32, // M
+    stepSize: 0.1, // mu
+    forgettingFactor: 0.99, // lambda
+    regularization: 0.01, // delta
+  });
+
+  const [metrics, setMetrics] = useState({
+    algorithm: "NLMS",
+    order: 32,
+    mse: "0.000000",
+  });
+
+  // UI triggers (expected by components)
+  const [generateECG, setGenerateECG] = useState(false);
+  const [applyNoiseTrigger, setApplyNoiseTrigger] = useState(false);
+  const [filteredECG, setFilteredECG] = useState(false);
+  const [applypsdTrigger, setApplypsdTrigger] = useState(false);
+
+  // Noise toggles (expected by EcgNoisy)
+  const [noise, setNoise] = useState({
+    baseline: false,
+    powerline: false,
+    emg: false,
+  });
+
+  // ECG dataset selection (use relative paths so hosted base path works)
+  const [csvFilePath, setCsvFilePath] = useState("ecg200.csv");
+  const prevPathRef = useRef(csvFilePath);
+
+  // Instruction panel state / button ref used in Home.jsx
+  const [showInstruction, setShowInstruction] = useState(false);
+  const buttonRef = useRef(null);
+
+  const parseCsvECG = useCallback((text) => {
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length < 2) return null;
+
+    const header = lines[0].split(",").map((h) => h.trim());
+    const timeIdx = header.findIndex((h) => h === "time_sec" || h.startsWith("time_sec"));
+    const rawIdx = header.findIndex((h) => h === "ECG_I" || h.includes("ECG_I"));
+    const cleanIdx = header.findIndex(
+      (h) => h === "ECG_I_filtered" || h.includes("ECG_I_filtered")
+    );
+
+    // Fallback to "first 3 columns" if headers don't match expected names
+    const resolvedTimeIdx = timeIdx >= 0 ? timeIdx : 0;
+    const resolvedRawIdx = rawIdx >= 0 ? rawIdx : 1;
+    const resolvedCleanIdx = cleanIdx >= 0 ? cleanIdx : 2;
+
+    const points = [];
+    const clean = [];
+    const times = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",");
+      const t = Number.parseFloat(cols[resolvedTimeIdx]);
+      const raw = Number.parseFloat(cols[resolvedRawIdx]);
+      const ref = Number.parseFloat(cols[resolvedCleanIdx]);
+      if (!Number.isFinite(t) || !Number.isFinite(raw) || !Number.isFinite(ref)) continue;
+      points.push({ x: t, y: raw });
+      clean.push(ref);
+      times.push(t);
     }
-    setApplypsdTrigger(true);
-  };
-  const runFilter = () => {
-    if (!generateECG) {
-      Swal.fire({
-        icon: "info",
-        title: "Oops...",
-        text: "Please generate ECG signal first!",
-      });
-      return;
-    }
 
-    const newConfig = {
-      ...config,
-      filterType: adaptiveAlgo,
-      filterOrder: Number(filterOrder),
-      stepSize: Number(stepSize),
-      forgettingFactor: Number(forgettingFactor),
-      regularization: Number(regularization),
-    };
-    setConfig(newConfig);
-    setFilteredECG(true);
-  };
-  const noiseTrigger = () => {
-    //console.log(noise);
-    if (!generateECG) {
-      Swal.fire({
-        icon: "info",
-        title: "Oops...",
-        text: "Please generate ECG signal first!",
-      });
-      return;
-    } else if (!noise.baseline && !noise.powerline && !noise.emg) {
-      Swal.fire({
-        icon: "info",
+    if (points.length < 2) return null;
 
-        title: "Oops...",
-        text: "Please select at least one noise type!",
-      });
-      return;
-    } else {
-      setApplyNoiseTrigger(true);
+    // Estimate sampling rate from x spacing (seconds)
+    let dtSum = 0;
+    let dtCount = 0;
+    for (let i = 1; i < Math.min(times.length, 200); i++) {
+      const dt = times[i] - times[i - 1];
+      if (dt > 0 && Number.isFinite(dt)) {
+        dtSum += dt;
+        dtCount++;
+      }
     }
-  };
-  useEffect(() => {
-    if (prevPathRef.current !== csvFilePath) {
+    const fs = dtCount > 0 ? 1 / (dtSum / dtCount) : 500;
+
+    return { points, clean, fs };
+  }, []);
+
+  const loadECGFromCsv = useCallback(async () => {
+    try {
+      setRawSamples([]);
+      setNoisySamples([]);
+      setFilteredSamples([]);
+      setCleanSignal([]);
+
+      const res = await fetch(csvFilePath);
+      if (!res.ok) throw new Error(`Failed to load ECG CSV: ${res.status}`);
+      const text = await res.text();
+      const parsed = parseCsvECG(text);
+      if (!parsed) throw new Error("CSV parse failed (no usable rows).");
+
+      setRawSamples(parsed.points);
+      setCleanSignal(parsed.clean);
+      setOriginalFs(parsed.fs);
+
+      // Reset triggers for a fresh run
       setApplyNoiseTrigger(false);
       setFilteredECG(false);
       setApplypsdTrigger(false);
-      setFilteredSamples([]);
-      prevPathRef.current = csvFilePath;
+      setMetrics({ algorithm: config.filterType, order: config.filterOrder, mse: "0.000000" });
+    } catch (e) {
+      console.error(e);
     }
-  }, [csvFilePath, prevPathRef, setApplyNoiseTrigger, setFilteredECG, setApplypsdTrigger, setFilteredSamples]); 
+  }, [csvFilePath, parseCsvECG, config.filterType, config.filterOrder]);
+
+  useEffect(() => {
+    if (!generateECG) return;
+    loadECGFromCsv();
+  }, [generateECG, loadECGFromCsv]);
 
   return (
-    <div className={styles.rightPanelContainer}>
-      <div className={styles.right}>
-        <h2>ECG Signal & Filter Controls</h2>
+    <SimulationContext.Provider
+      value={{
+        // graph time controls
+        time,
+        setTime,
+        originalFs,
+        setOriginalFs,
 
-        <div className={styles.box}>
-          <h3>Signal Setup</h3>
-          <label>Select ECG Dataset</label>
-          <select
-            value={csvFilePath}
-            onChange={(e) => setCsvFilePath(e.target.value)}
-          >
-            <option value={opt("ecg200.csv")}>ECG Dataset 1</option>
-            <option value={opt("ecg300.csv")}>ECG Dataset 2</option>
-            <option value={opt("ecg100.csv")}>ECG Dataset 3</option>
-          </select>
+        // signals
+        rawSamples,
+        setRawSamples,
+        noisySamples,
+        setNoisySamples,
+        cleanSignal,
+        setCleanSignal,
+        filteredSamples,
+        setFilteredSamples,
 
-          <label>Duration (seconds)           <p className={styles.rangeValue}>
-            : <span id="demo">{time} seconds</span>
-          </p> </label>
-          <input
-            type="range"
-            min="1"
-            max="50"
-            value={time}
-            onChange={(e) => setTime(Number(e.target.value))}
-          />
+        // triggers
+        generateECG,
+        setGenerateECG,
+        applyNoiseTrigger,
+        setApplyNoiseTrigger,
+        filteredECG,
+        setFilteredECG,
+        applypsdTrigger,
+        setApplypsdTrigger,
 
-          <label>
-            Sampling Rate : <span id="demo">{originalFs} Hz</span>
-          </label>
-          {/* <input
-            type="range"
-            min="1"
-            max="1000"
-            value={originalFs}
-            onChange={(e) => setUserFs(Number(e.target.value))}
-          /> */}
-          <p className={styles.rangeValue}>
-            
-          </p>
+        // noise toggles
+        noise,
+        setNoise,
 
-          <button onClick={() => setGenerateECG(true)}>
-            Generate ECG Signal
-          </button>
-        </div>
+        // dataset selection
+        csvFilePath,
+        setCsvFilePath,
+        prevPathRef,
 
-        <div className={styles.box}>
-          <h3>Add Noise</h3>
+        // adaptive config
+        config,
+        setConfig,
 
-          <label>
-            <input
-              type="checkbox"
-              checked={noise.baseline}
-              onChange={(e) =>
-                setNoise({ ...noise, baseline: e.target.checked })
-              }
-            />
-            Baseline Wander
-          </label>
+        // metrics
+        metrics,
+        setMetrics,
 
-          <label>
-            <input
-              type="checkbox"
-              checked={noise.powerline}
-              onChange={(e) =>
-                setNoise({ ...noise, powerline: e.target.checked })
-              }
-            />
-            Powerline (50 Hz)
-          </label>
-
-          <label>
-            <input
-              type="checkbox"
-              checked={noise.emg}
-              onChange={(e) => setNoise({ ...noise, emg: e.target.checked })}
-            />
-            EMG Noise
-          </label>
-          <div className={styles.buttonContainer}>
-            <button onClick={() => noiseTrigger()}>Add Noise to Signal</button>
-          </div>
-        </div>
-        {/* adaptive filter input */}
-        <div className={styles.box}>
-          <h3>Adaptive Filter (NLMS / RLS)</h3>
-
-          <label>Algorithm</label>
-          <select value={adaptiveAlgo} onChange={(e) => setAdaptiveAlgo(e.target.value)}>
-            <option value="NLMS">NLMS</option>
-            <option value="RLS">RLS</option>
-          </select>
-
-          <label>Filter Order (M)</label>
-          <input
-            type="number"
-            min="1"
-            max="256"
-            step="1"
-            value={filterOrder}
-            onChange={(e) => setFilterOrder(Number(e.target.value))}
-          />
-
-          {adaptiveAlgo === "NLMS" && (
-            <>
-              <label>Step size μ</label>
-              <input
-                type="number"
-                step="0.01"
-                value={stepSize}
-                onChange={(e) => setStepSize(Number(e.target.value))}
-              />
-            </>
-          )}
-
-          {adaptiveAlgo === "RLS" && (
-            <>
-              <label>Forgetting factor λ</label>
-              <input
-                type="number"
-                step="0.001"
-                value={forgettingFactor}
-                onChange={(e) => setForgettingFactor(Number(e.target.value))}
-              />
-
-              <label>Regularization δ</label>
-              <input
-                type="number"
-                step="0.001"
-                value={regularization}
-                onChange={(e) => setRegularization(Number(e.target.value))}
-              />
-            </>
-          )}
-
-          <div className={styles.psdContainer}>
-            <button onClick={runFilter}>Apply Filter</button>
-            <button onClick={runPsd}>Compute PSD</button>
-          </div>
-        </div>
-      </div>
-    </div>
+        // instruction UI controls
+        showInstruction,
+        setShowInstruction,
+        buttonRef,
+      }}
+    >
+      {children}
+    </SimulationContext.Provider>
   );
 };
