@@ -44,7 +44,8 @@ export const SimulationProvider = ({ children }) => {
   });
 
   // ECG dataset selection
-  const [csvFilePath, setCsvFilePath] = useState("/ecg200.csv");
+  const baseUrl = import.meta.env.BASE_URL ?? '/';
+  const [csvFilePath, setCsvFilePath] = useState(baseUrl + "ecg200.csv");
   const prevPathRef = useRef(csvFilePath);
 
   // Instruction panel state / button ref used in Home.jsx

@@ -4,6 +4,7 @@ import styles from "./rightPanel.module.css";
 import Swal from "sweetalert2";
 
 export const RightPanel = () => {
+  const baseUrl = import.meta.env.BASE_URL ?? '/';
   const {
     time,
     setTime,
@@ -105,9 +106,9 @@ export const RightPanel = () => {
             value={csvFilePath}
             onChange={(e) => setCsvFilePath(e.target.value)}
           >
-            <option value={"/ecg200.csv"}>ECG Dataset 1</option>
-            <option value={"/ecg300.csv"}>ECG Dataset 2</option>
-            <option value={"/ecg100.csv"}>ECG Dataset 3</option>
+            <option value={baseUrl + "ecg200.csv"}>ECG Dataset 1</option>
+            <option value={baseUrl + "ecg300.csv"}>ECG Dataset 2</option>
+            <option value={baseUrl + "ecg100.csv"}>ECG Dataset 3</option>
           </select>
 
           <label>Duration (seconds)           <p className={styles.rangeValue}>
